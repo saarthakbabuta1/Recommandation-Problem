@@ -1,0 +1,140 @@
+setwd("~/Desktop/R practice/ml-1m")
+
+library(stringr)
+library(stringdist)
+library(arules)
+library(dplyr)
+library(reshape2)
+library(Matrix)
+library(ggplot2)
+
+
+movies=read.delim("movies.dat",col.names = "Movie name")
+ratings=read.csv("ratings.csv")
+users=read.csv("users.csv")
+movies$Movie.name=as.character(movies$Movie.name)
+movies$x=strsplit(movies$Movie.name,"::")
+
+i=1
+for (i in 1:3882) {
+  movies$Movie.ID[i]=movies$x[[i]][1]
+  movies$Movie.Name[i]=movies$x[[i]][2]
+  movies$Movie.Genre[i]=movies$x[[i]][3]
+}
+
+movies$year=str_sub(str_trim(movies$Movie.Name) , start = -5,end = -2)
+sum(is.na(movies$year))                    
+
+movies.is.na=movies[is.na(movies$year),]
+na.movies=movies.is.na$Movie.name
+
+movies=movies[!is.na(movies$year),]
+
+movies$title=str_sub(str_trim(movies$Movie.Name) , start = 1,end = -8)
+
+all_genres=unique(unlist(str_split(movies$Movie.Genre,"\\|")))
+
+str_detect(movies,"(no genres listed)")
+all_genres
+
+sum(is.na(movies$Movie.Genre))
+
+for(genre in all_genres){
+  
+  movies[str_c("genre_",genre)] = ifelse(( str_detect(movies$Movie.Genre,genre) | str_detect(movies$Movie.Genre,"no genres") ) , 1 , 0)
+}
+
+head(movies)
+
+movies$Movie.name=NULL
+movies$x=NULL
+movies$Movie.Genre=NULL
+
+head(ratings)
+
+ratings=ratings %>% filter(! Movie.ID %in% na.movies)
+user_item_matrix <- as(split(ratings[,"Movie.ID"], ratings[,"User.ID"]), "transactions")
+user_item_matrix
+
+####### Apriori Inputs ######
+rule_param = list(
+  supp = 0.001,
+  conf = 0.7,
+  maxlen = 2
+)
+
+assoc_rules=apriori(user_item_matrix,parameter = rule_param)
+assoc_rules=as(assoc_rules,"data.frame")
+summary(assoc_rules)
+
+
+assoc_rules_1 = subset(assoc_rules, lift >= 4.323)
+assoc_rules_1=as(assoc_rules_1,"data.frame")
+
+summary(assoc_rules_1)
+
+assoc_rules$rules
+
+############# Taking out movies #######
+
+
+rules = sapply(assoc_rules_1$rules,function(x){
+  x = gsub("[\\{\\}]", "", regmatches(x, gregexpr("\\{.*\\}", x))[[1]])
+  x = gsub("=>",",",x)
+  x = str_replace_all(x," ","")
+  return( x )
+})
+
+
+rules = as.character(rules)
+rules = str_split(rules,",")
+
+assoc_rules_1$lhs_movie = sapply( rules, "[[", 1)
+assoc_rules_1$rhs_movie = sapply( rules , "[[", 2)
+
+assoc_rules_1$rules = NULL
+
+assoc_rules_1$lhs_movie_name=movies$Movie.Name[match(assoc_rules_1$lhs_movie,movies$Movie.ID)]
+assoc_rules_1$rhs_movie_name=movies$Movie.Name[match(assoc_rules_1$rhs_movie,movies$Movie.ID)]
+assoc_rules_1$year_lhs=movies$year[match(assoc_rules_1$lhs_movie,movies$Movie.ID)]
+assoc_rules_1$year_rhs=movies$year[match(assoc_rules_1$rhs_movie,movies$Movie.ID)]
+
+assoc_rules_1=assoc_rules_1[!is.na(assoc_rules_1$lhs_movie_name),]
+assoc_rules_1=assoc_rules_1[!is.na(assoc_rules_1$rhs_movie_name),]
+
+assoc_rules_1$lhs_title=str_sub(str_trim(assoc_rules_1$lhs_movie_name) , start = 1,end = -8)
+assoc_rules_1$rhs_title=str_sub(str_trim(assoc_rules_1$rhs_movie_name) , start = 1,end = -8)
+
+assoc_rules_1=assoc_rules_1[order(-assoc_rules_1$lift),]
+
+assoc_rules_1$sequel_check=amatch(assoc_rules_1$lhs_title,assoc_rules_1$rhs_title,method = "osa")
+
+
+assoc_rules_2=assoc_rules_1[c(1:500),]
+
+lookup_movies = read.delim("movies.dat",col.names = "Movie name")
+lookup_movies$Movie.name=as.character(lookup_movies$Movie.name)
+lookup_movies$x=strsplit(lookup_movies$Movie.name,"::")
+
+i=1
+for (i in 1:3882) {
+  lookup_movies$Movie.ID[i]=lookup_movies$x[[i]][1]
+  lookup_movies$Movie.Name[i]=lookup_movies$x[[i]][2]
+  lookup_movies$Movie.Genre[i]=lookup_movies$x[[i]][3]
+}
+
+assoc_rules_2$lhs_genre=lookup_movies$Movie.Genre[match(assoc_rules_2$lhs_movie,lookup_movies$Movie.ID)]
+assoc_rules_2$rhs_genre=lookup_movies$Movie.Genre[match(assoc_rules_2$rhs_movie,lookup_movies$Movie.ID)]
+
+assoc_rules_2$check=ifelse(assoc_rules_2$lhs_genre==assoc_rules_2$rhs_genre,1,0)
+
+assoc_rules_3=assoc_rules_2[assoc_rules_2$check==0,]
+
+genre_rules=assoc_rules_3[,c(11,12,1,2,3)]
+
+
+genre_rules$lhs_genre=gsub("\\|",",",genre_rules$lhs_genre)
+genre_rules$rhs_genre=gsub("\\|",",",genre_rules$rhs_genre)
+
+year_rules=assoc_rules_3[,c(10,9,1,2,3)]
+
